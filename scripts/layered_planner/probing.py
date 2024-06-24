@@ -33,7 +33,7 @@ class Params:
         self.extension = 0.8 # [m], extension parameter: this controls how far the RRT extends in each step.
         self.world_bounds_x = [-2.5, 2.5] # [m], map size in X-direction
         self.world_bounds_y = [-2.5, 2.5] # [m], map size in Y-direction
-        self.drone_vel = 4.0 # [m/s]
+        self.drone_vel = 2.0 # [m/s]
         self.ViconRate = 100 # [Hz]
         self.influence_radius = 0.15 # [m] potential fields radius, defining repulsive area size near the obstacle
         self.goal_tolerance = 0.05 # [m], maximum distance threshold to reach the goal
@@ -48,8 +48,10 @@ class AttackParams:
         self.victim_index_2 = 0
         self.victim_index_3 = 0
         self.spawntime = 20
+        self.spawndistance = 1.2
         self.obst_size_bit = 0.1
-        self.vel_atk_drone = 6
+        self.vel_atk_drone = 4
+        self.spawnangle = pi * 1 / 4
 
 class Robot:
     def __init__(self, id):
@@ -138,12 +140,6 @@ obstacles = [
 #               np.array([[-passage_location+passage_width/2., -0.5], [2.5, -0.5], [2.5, 0.5], [-passage_location+passage_width/2., 0.5]]),
 #             ]
 # obstacles = []
-robots = None
-robot1 = None
-followers_sp = None
-traj_global = None
-P = None
-
 def swarm_init():
     global robots, robot1, obstacles, followers_sp, traj_global, P
     robots = []
@@ -183,12 +179,12 @@ def swarm_step(sp_ind):
         # robots repel from each other inside the formation
         robots_obstacles_sp = [x for i,x in enumerate(followers_sp + [robot1.sp]) if i!=p] # all poses except the robot[p]
         robots_obstacles = poses2polygons( robots_obstacles_sp ) # each drone is defined as a small cube for inter-robots collision avoidance
-        obstacles1 = np.array(obstacles + robots_obstacles) # combine exisiting obstacles on the map with other robots[for each i: i!=p] in formation
+        obstacles1 = np.array(obstacles) # combine exisiting obstacles on the map with other robots[for each i: i!=p] in formation
         # follower robot's position correction with local planner
         robots[p+1].local_planner(obstacles1, params)
         followers_sp[p] = robots[p+1].sp
 
-def make_target_coor(goal, vel_atk_drone, current_atk_coor):
+def make_target_coor(goal, current_atk_coor):
     """
     goal + current_atk_coor -> direction vector
     direction vector + vel_atk_drone -> target_vector
@@ -197,17 +193,22 @@ def make_target_coor(goal, vel_atk_drone, current_atk_coor):
     """
     direction_vector = goal - current_atk_coor
 
+    distance = norm(goal - current_atk_coor)
+    if distance < 0.01 * attack_params.vel_atk_drone:
+        return goal
+
     target_coor = current_atk_coor + 0.01 * \
-        vel_atk_drone * (direction_vector / norm(direction_vector))
+        attack_params.vel_atk_drone * (direction_vector / norm(direction_vector))
 
     return target_coor
 
 def move_attack_drone(special_target_1):
-    temp_target_1 = special_target_1
+    global attack_drone_position
+    attack_drone_position = special_target_1
     temp_bit = 0.1  # for the size of obstacle: default
 
-    obstacles[-3] = [[temp_target_1[0], temp_target_1[1]], [temp_target_1[0] + temp_bit, temp_target_1[1]],
-               [temp_target_1[0] + temp_bit, temp_target_1[1] + temp_bit], [temp_target_1[0], temp_target_1[1] + temp_bit]]
+    obstacles[-3] = [[attack_drone_position[0] - temp_bit / 2, attack_drone_position[1] - temp_bit / 2], [attack_drone_position[0] + temp_bit / 2, attack_drone_position[1] - temp_bit / 2],
+               [attack_drone_position[0] + temp_bit / 2, attack_drone_position[1] + temp_bit / 2], [attack_drone_position[0] - temp_bit / 2, attack_drone_position[1] + temp_bit / 2]]
     # obs[-3] += np.array([-0.007, 0.0]) * params.drone_vel / 2
     # obs[-2] += np.array([-0.007, 0.0]) * params.drone_vel / 2
     # obstacles[-2] = [[temp_target_2[0], temp_target_2[1]], [temp_target_2[0] + temp_bit, temp_target_2[1]],
@@ -233,59 +234,105 @@ def attack(strategy):
         goal_for_atk[0] += ATTACK_DISTANCE
     elif strategy == 'c':
         goal_for_atk = 0.5 * (robots[0].sp + robots[3].sp)
-
+    
+    elif strategy == 'd':
+        theta = attack_params.spawnangle
+        p1 = centroid
+        p2 = centroid + np.array([cos(theta), sin(theta)])
+        p3 = np.array(attack_drone_position)
+        d = (np.cross(p2-p1, p1-p3))/norm(p2-p1)
+        distance = norm(p1-p3)
+        if 0.01 * attack_params.vel_atk_drone > distance:
+            goal_for_atk = p1
+        elif 0.01 * attack_params.vel_atk_drone > norm(d):
+            p4 = p3 + np.array([-d * sin(theta), d * cos(theta)]) # cross point on the angle line
+            goal_for_atk = p4 + sqrt((0.01 * attack_params.vel_atk_drone)**2 - d**2) * normalize(p1-p4)
+        else:
+            p4 = p3 + np.array([-d * sin(theta), d * cos(theta)]) # move to the cross point
+            goal_for_atk = p4
+    
     special_target = make_target_coor(
-        goal_for_atk, attack_params.vel_atk_drone, obstacles[-3][0])
+        goal_for_atk, p3)
     
     move_attack_drone(special_target)
 
+def save_position_to_file(filename):
+    with open(filename, 'a') as f:
+        for robot in robots:
+            f.write(str(robot.sp[0]) + "," + str(robot.sp[1]) + ",")
+        
+        f.write(str(attack_drone_position[0]) + "," + str(attack_drone_position[1]) + "\n")
+
+robots = None
+robot1 = None
+followers_sp = None
+traj_global = None
+P = None
+attack_drone_position = [None, None]
+
 # Layered Motion Planning: RRT (global) + Potential Field (local)
 if __name__ == '__main__':
-    fig2D = plt.figure(figsize=(10,10))
-    draw_map(obstacles)
-    plt.plot(xy_start[0],xy_start[1],'bo',color='red', markersize=20, label='start')
-    plt.plot(xy_goal[0], xy_goal[1],'bo',color='green', markersize=20, label='goal')
+    # get input arguments
+    for i in range(10):
+        attack_params.spawnangle = pi * i / 10
 
-    swarm_init()
-    print('Start movement...')
-    t0 = time.time(); t_array = []
-    sp_ind = 0
-    while True: # loop through all the setpoint from global planner trajectory, traj_global
-        t_array.append( time.time() - t0 )
-        # print("Current time [sec]: ", time.time() - t0)
-        dist_to_goal = norm(robot1.sp - xy_goal)
-        if dist_to_goal < params.goal_tolerance: # [m]
-            print('Goal is reached')
-            break
-        
-        move_obstacles(obstacles, params) # change poses of some obstacles on the map
+        fig2D = plt.figure(figsize=(10,10))
+        draw_map(obstacles)
+        plt.plot(xy_start[0],xy_start[1],'bo',color='red', markersize=20, label='start')
+        plt.plot(xy_goal[0], xy_goal[1],'bo',color='green', markersize=20, label='goal')
 
-        if sp_ind == attack_params.spawntime:
-            attack_drone_position = np.array([-0.5, 0.7])
-            print("0. attacker is spawned at: " +
-                str(attack_drone_position[0])+", "+str(attack_drone_position[1]))
+        swarm_init()
+        print('Start movement...')
+        t0 = time.time(); t_array = []
+        sp_ind = 0
 
-            move_attack_drone(attack_drone_position)
+        recorded_file = "{}/recorded_position_{}pi.csv".format("mutation", float(i)/10)
+        with open(recorded_file, 'w') as f:
+            for index, robot in enumerate(robots):
+                f.write("robot" + str(index) + "_x, robot" + str(index) + "_y,")
+            f.write("attack_drone_x, attack_drone_y\n")
 
-        swarm_step(sp_ind)
-        attack('c')
-        # centroid pose:
-        centroid = 0
-        for robot in robots: centroid += robot.sp / len(robots)
-        # metrics.centroid_path = np.vstack([metrics.centroid_path, centroid])
-        # visualization
-        if params.visualize:
-            plt.cla()
-            visualize2D()        
+        while True: # loop through all the setpoint from global planner trajectory, traj_global
+            t_array.append( time.time() - t0 )
+            # print("Current time [sec]: ", time.time() - t0)
+            dist_to_goal = norm(robot1.sp - xy_goal)
+            if dist_to_goal < params.goal_tolerance: # [m]
+                print('Goal is reached')
+                break
+            
+            # move_obstacles(obstacles, params) # change poses of some obstacles on the map
 
-            plt.draw()
-            plt.pause(0.01)
+            if sp_ind == attack_params.spawntime: # attack drone is spawned at the spawntime and angle
+                attack_position_x = centroid[0] + attack_params.spawndistance * cos(attack_params.spawnangle)
+                attack_position_y = centroid[1] + attack_params.spawndistance * sin(attack_params.spawnangle)
+                attack_drone_position = np.array([attack_position_x, attack_position_y])
+                print("0. attacker is spawned at: " +
+                    str(attack_drone_position[0])+", "+str(attack_drone_position[1]))
 
-        # update loop variable
-        if sp_ind < traj_global.shape[0]-1 and norm(robot1.sp_global - centroid) < params.max_sp_dist: sp_ind += 1
+                move_attack_drone(attack_drone_position)
 
-# close windows if Enter-button is pressed
-plt.draw()
-plt.pause(0.1)
-raw_input('Hit Enter to close')
-plt.close('all')
+            swarm_step(sp_ind) # move robots in the swarm
+
+            if sp_ind >= attack_params.spawntime: # move attack drone
+                attack('d')
+            # centroid pose:
+            centroid = 0
+            for robot in robots: centroid += robot.sp / len(robots)
+            # metrics.centroid_path = np.vstack([metrics.centroid_path, centroid])
+            # visualization
+            if params.visualize:
+                plt.cla()
+                visualize2D()        
+
+                plt.draw()
+                plt.pause(0.01)
+
+            # update loop variable
+            if sp_ind < traj_global.shape[0]-1 and norm(robot1.sp_global - centroid) < params.max_sp_dist: sp_ind += 1
+
+            save_position_to_file(recorded_file)
+
+            # close windows if Enter-button is pressed
+            # plt.pause(0.1)
+            # raw_input('Hit Enter to close')
+        plt.close('all')
