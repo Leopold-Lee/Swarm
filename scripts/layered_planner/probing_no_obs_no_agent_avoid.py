@@ -107,8 +107,8 @@ def visualize2D():
 init_fonts(small=12, medium=16, big=26)
 params = Params()
 attack_params = AttackParams()
-xy_start = np.array([-2, 0])
-xy_goal =  np.array([2, 0])
+xy_start = np.array([-1.5, 0])
+xy_goal =  np.array([1.5, 0])
 # xy_goal =  np.array([1.3, 1.0])
 
 # Obstacles map construction

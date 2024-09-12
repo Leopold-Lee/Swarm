@@ -107,8 +107,8 @@ def visualize2D():
 init_fonts(small=12, medium=16, big=26)
 params = Params()
 attack_params = AttackParams()
-xy_start = np.array([-2, 0])
-xy_goal =  np.array([2, 0])
+xy_start = np.array([-1.5, 0])
+xy_goal =  np.array([1.5, 0])
 # xy_goal =  np.array([1.3, 1.0])
 
 # Obstacles map construction
@@ -179,7 +179,7 @@ def swarm_init():
     robot1.route = np.array([traj_global[0,:]])
     robot1.sp = robot1.route[-1,:]
 
-    followers_sp = formation(params.num_robots, leader_des=robot1.sp, v=np.array([0,-1]), l=params.interrobots_dist)
+    followers_sp = formation(params.num_robots, leader_des=robot1.sp, v=np.array([1,0]), l=params.interrobots_dist)
     for i in range(len(followers_sp)):
         robots[i+1].sp = followers_sp[i]
         robots[i+1].route = np.array([followers_sp[i]])
